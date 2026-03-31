@@ -1,0 +1,168 @@
+#include "xhost.h"
+#include "xpackage.h"
+#include "Bridge.h"
+#include "xload.h"
+#include "xlang.h"
+#include <iostream>
+#include <string>
+
+#if (WIN32)
+#include <windows.h>
+#define BRIDGE_EXPORT __declspec(dllexport) 
+#else
+#define BRIDGE_EXPORT
+#endif
+
+// Global State
+X::Value g_HostObject;
+X::XLoad g_xload;
+X::Config g_config;
+
+// XLang package class wrapping bridge commands
+class SunshineAPI
+{
+    SunshineCallTable* mHostApis = nullptr;
+public:
+    BEGIN_PACKAGE(SunshineAPI)
+        APISET().AddFunc<5>("StartVideo", &SunshineAPI::StartVideo);
+        APISET().AddFunc<1>("StartAudio", &SunshineAPI::StartAudio);
+        APISET().AddFunc<0>("StopProcessing", &SunshineAPI::StopProcessing);
+        APISET().AddFunc<1>("InjectInput", &SunshineAPI::InjectInput);
+        APISET().AddFunc<1>("SetHostObject", &SunshineAPI::SetHostObject);
+    END_PACKAGE
+
+    void SetHostApis(SunshineCallTable* hostApis)
+    {
+        mHostApis = hostApis;
+    }
+
+	void SetHostObject(X::Value hostObj)
+	{
+		g_HostObject = hostObj;
+	}
+
+    bool StartVideo(std::string display, int width, int height, int fps, int bitrate)
+    {
+        if (mHostApis && mHostApis->StartVideo)
+        {
+            return mHostApis->StartVideo(display.c_str(), width, height, fps, bitrate);
+        }
+        return false;
+    }
+
+    bool StartAudio(std::string audioSink)
+    {
+        if (mHostApis && mHostApis->StartAudio)
+        {
+            return mHostApis->StartAudio(audioSink.c_str());
+        }
+        return false;
+    }
+
+    void StopProcessing()
+    {
+        if (mHostApis && mHostApis->StopProcessing)
+        {
+            mHostApis->StopProcessing();
+        }
+    }
+
+    int InjectInput(std::string binaryData)
+    {
+        if (mHostApis && mHostApis->InjectInput)
+        {
+            return mHostApis->InjectInput((const uint8_t*)binaryData.data(), (int)binaryData.size());
+        }
+        return -1;
+    }
+};
+
+SunshineAPI g_api;
+
+#define LRPC_PORT 31415
+
+static bool GetCurLibInfo(void* EntryFuncName, std::string& strFullPath,
+    std::string& strFolderPath, std::string& strLibName)
+{
+#if (WIN32)
+    HMODULE hModule = NULL;
+    GetModuleHandleEx(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        (LPCTSTR)EntryFuncName,
+        &hModule);
+    char path[MAX_PATH];
+    GetModuleFileName(hModule, path, MAX_PATH);
+    std::string strPath(path);
+    strFullPath = strPath;
+    auto pos = strPath.rfind("\\");
+    if (pos != std::string::npos)
+    {
+        strFolderPath = strPath.substr(0, pos);
+        strLibName = strPath.substr(pos + 1);
+    }
+#endif
+    // Remove extension
+    auto pos2 = strLibName.rfind(".");
+    if (pos2 != std::string::npos)
+    {
+        strLibName = strLibName.substr(0, pos2);
+    }
+    return true;
+}
+
+// ----------------------------------------------------
+// Public Plugin C API Exports for Sunshine
+// ----------------------------------------------------
+
+extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char* hostPath)
+{
+    SunshineCallTable* pTab = (SunshineCallTable*)hostCallTable;
+    
+    // Wire up Inbound callbacks to push data natively to XLang scripts
+    pTab->OnVideoFrame = (f_OnVideoFrame)([](const uint8_t* data, int size, bool isIdr, int64_t frameIndex)
+    {
+        if (g_HostObject.IsObject())
+        {
+            X::Value binValue((char*)data, size);
+            g_HostObject["OnVideoFrame"](binValue, isIdr, (long long)frameIndex);
+        }
+    });
+
+    pTab->OnAudioPacket = (f_OnAudioPacket)([](const uint8_t* data, int size, int64_t pts)
+    {
+        if (g_HostObject.IsObject())
+        {
+            X::Value binValue((char*)data, size);
+            g_HostObject["OnAudioPacket"](binValue, (long long)pts);
+        }
+    });
+
+    g_api.SetHostApis(pTab);
+
+    std::string strFullPath, strFolderPath, strLibName;
+    GetCurLibInfo((void*)LoadBridge, strFullPath, strFolderPath, strLibName);
+
+    g_config.appPath = new char[strFolderPath.length() + 1];
+    memcpy((char*)g_config.appPath, strFolderPath.data(), strFolderPath.length() + 1);
+    g_config.dbg = false;
+    g_config.runEventLoopInThread = true;
+    g_config.enterEventLoop = true;
+
+    // Load and Run XLang
+    int retCode = g_xload.Load(&g_config);
+    std::cout << "[SunshineBridge] XLang Init RetCode: " << retCode << std::endl;
+    
+    if (retCode == 0) 
+    {
+        g_xload.Run();
+        X::RegisterPackage<SunshineAPI>(hostPath, "sunshine", &g_api);
+        X::g_pXHost->Lrpc_Listen(LRPC_PORT, false);
+    }
+    return retCode;
+}
+
+extern "C" BRIDGE_EXPORT void UnloadBridge()
+{
+    g_api.SetHostApis(nullptr);
+    g_xload.Unload();
+}
