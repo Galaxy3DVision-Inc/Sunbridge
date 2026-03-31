@@ -29,8 +29,10 @@ extern "C" {
     /// Callback whenever a new encoded Video NAL Frame is ready
     typedef void (*f_OnVideoFrame)(const uint8_t* data, int size, bool isIdr, int64_t frameIndex);
     
-    /// Callback whenever a new encoded Opus/Audio Packet is ready
     typedef void (*f_OnAudioPacket)(const uint8_t* data, int size, int64_t pts);
+    
+    /// Callback from XLang to request a new IDR/SPS slice immediately
+    typedef void (*f_RequestIdr)();
 
 #ifdef __cplusplus
 }
@@ -48,4 +50,5 @@ struct SunshineCallTable
     // Inbound listener hooks provided by the DLL plugin to Sunshine
     f_OnVideoFrame OnVideoFrame;
     f_OnAudioPacket OnAudioPacket;
+    f_RequestIdr RequestIdr;
 };

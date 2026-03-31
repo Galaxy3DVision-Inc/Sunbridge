@@ -50,6 +50,7 @@ public:
         APISET().AddFunc<1>("StartAudio", &SunshineAPI::StartAudio);
         APISET().AddFunc<0>("StopProcessing", &SunshineAPI::StopProcessing);
         APISET().AddFunc<1>("InjectInput", &SunshineAPI::InjectInput);
+        APISET().AddFunc<0>("RequestIdr", &SunshineAPI::RequestIdr);
         APISET().AddFunc<1>("FetchEncodedFrame", &SunshineAPI::FetchEncodedFrame);
         APISET().AddFunc<1>("FetchAudioPacket", &SunshineAPI::FetchAudioPacket);
     END_PACKAGE
@@ -82,6 +83,14 @@ public:
         if (mHostApis && mHostApis->StopProcessing)
         {
             mHostApis->StopProcessing();
+        }
+    }
+
+    void RequestIdr()
+    {
+        if (mHostApis && mHostApis->RequestIdr)
+        {
+            mHostApis->RequestIdr();
         }
     }
 
