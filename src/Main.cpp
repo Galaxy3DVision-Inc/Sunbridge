@@ -47,7 +47,9 @@ class SunshineAPI
 public:
     BEGIN_PACKAGE(SunshineAPI)
         APISET().AddFunc<5>("StartVideo", &SunshineAPI::StartVideo);
+        APISET().AddFunc<0>("StopVideo", &SunshineAPI::StopVideo);
         APISET().AddFunc<1>("StartAudio", &SunshineAPI::StartAudio);
+        APISET().AddFunc<0>("StopAudio", &SunshineAPI::StopAudio);
         APISET().AddFunc<0>("StopProcessing", &SunshineAPI::StopProcessing);
         APISET().AddFunc<1>("InjectInput", &SunshineAPI::InjectInput);
         APISET().AddFunc<0>("RequestIdr", &SunshineAPI::RequestIdr);
@@ -76,6 +78,22 @@ public:
             return mHostApis->StartAudio(audioSink.c_str());
         }
         return false;
+    }
+
+    void StopVideo()
+    {
+        if (mHostApis && mHostApis->StopVideo)
+        {
+            mHostApis->StopVideo();
+        }
+    }
+
+    void StopAudio()
+    {
+        if (mHostApis && mHostApis->StopAudio)
+        {
+            mHostApis->StopAudio();
+        }
     }
 
     void StopProcessing()

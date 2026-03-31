@@ -13,10 +13,16 @@ extern "C" {
     /// Tell Sunshine to start the video capture and encoding thread
     typedef bool (*f_StartVideo)(const char* display, int width, int height, int fps, int bitrate);
     
+    /// Halt the video capture thread dynamically without killing the host
+    typedef void (*f_StopVideo)();
+
     /// Tell Sunshine to start the audio capture and encoding thread
     typedef bool (*f_StartAudio)(const char* audioSink);
     
-    /// Completely halt processing threads
+    /// Halt the audio capture thread dynamically without killing the host
+    typedef void (*f_StopAudio)();
+    
+    /// Completely halt the entire Sunshine background processor
     typedef void (*f_StopProcessing)();
     
     /// Inject a packet of gamepad/mouse/keyboard Input strictly over the local API
@@ -43,7 +49,9 @@ struct SunshineCallTable
 {
     // Outbound hooks provided by Sunshine
     f_StartVideo StartVideo;
+    f_StopVideo StopVideo;
     f_StartAudio StartAudio;
+    f_StopAudio StopAudio;
     f_StopProcessing StopProcessing;
     f_InjectInput InjectInput;
 
