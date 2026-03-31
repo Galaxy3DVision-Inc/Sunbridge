@@ -5,6 +5,10 @@
 #include "xlang.h"
 #include <iostream>
 #include <string>
+#include <mutex>
+#include <queue>
+#include <condition_variable>
+#include <vector>
 
 #if (WIN32)
 #include <windows.h>
@@ -14,9 +18,27 @@
 #endif
 
 // Global State
-X::Value g_HostObject;
 X::XLoad g_xload;
 X::Config g_config;
+
+struct VideoFrameData {
+    std::vector<uint8_t> data;
+    bool isIdr;
+    int64_t frameIndex;
+};
+
+struct AudioPacketData {
+    std::vector<uint8_t> data;
+    int64_t pts;
+};
+
+std::mutex g_vidQMutex;
+std::condition_variable g_vidQCv;
+std::queue<VideoFrameData> g_vidQ;
+
+std::mutex g_audQMutex;
+std::condition_variable g_audQCv;
+std::queue<AudioPacketData> g_audQ;
 
 // XLang package class wrapping bridge commands
 class SunshineAPI
@@ -28,18 +50,14 @@ public:
         APISET().AddFunc<1>("StartAudio", &SunshineAPI::StartAudio);
         APISET().AddFunc<0>("StopProcessing", &SunshineAPI::StopProcessing);
         APISET().AddFunc<1>("InjectInput", &SunshineAPI::InjectInput);
-        APISET().AddFunc<1>("SetHostObject", &SunshineAPI::SetHostObject);
+        APISET().AddFunc<1>("FetchEncodedFrame", &SunshineAPI::FetchEncodedFrame);
+        APISET().AddFunc<1>("FetchAudioPacket", &SunshineAPI::FetchAudioPacket);
     END_PACKAGE
 
     void SetHostApis(SunshineCallTable* hostApis)
     {
         mHostApis = hostApis;
     }
-
-	void SetHostObject(X::Value hostObj)
-	{
-		g_HostObject = hostObj;
-	}
 
     bool StartVideo(std::string display, int width, int height, int fps, int bitrate)
     {
@@ -74,6 +92,47 @@ public:
             return mHostApis->InjectInput((const uint8_t*)binaryData.data(), (int)binaryData.size());
         }
         return -1;
+    }
+
+    X::Value FetchEncodedFrame(int timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(g_vidQMutex);
+        if (!g_vidQCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), []{ return !g_vidQ.empty(); })) {
+            return X::Value(); // Return null if timeout
+        }
+        
+        auto frame = g_vidQ.front();
+        g_vidQ.pop();
+        lock.unlock();
+
+        X::List list;
+        X::Bin binFrame((char*)frame.data.data(), frame.data.size(), true);
+        list += binFrame;
+        list += X::Value(frame.isIdr);
+        list += X::Value((long long)frame.frameIndex);
+        
+        X::Value retVal(list);
+        return retVal;
+    }
+
+    X::Value FetchAudioPacket(int timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(g_audQMutex);
+        if (!g_audQCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), []{ return !g_audQ.empty(); })) {
+            return X::Value(); // Return null if timeout
+        }
+        
+        auto pkt = g_audQ.front();
+        g_audQ.pop();
+        lock.unlock();
+
+        X::List list;
+        X::Bin binPacket((char*)pkt.data.data(), pkt.data.size(), true);
+        list += binPacket;
+        list += X::Value((long long)pkt.pts);
+        
+        X::Value retVal(list);
+        return retVal;
     }
 };
 
@@ -121,20 +180,26 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char* hostPat
     // Wire up Inbound callbacks to push data natively to XLang scripts
     pTab->OnVideoFrame = (f_OnVideoFrame)([](const uint8_t* data, int size, bool isIdr, int64_t frameIndex)
     {
-        if (g_HostObject.IsObject())
         {
-            X::Value binValue((char*)data, size);
-            g_HostObject["OnVideoFrame"](binValue, isIdr, (long long)frameIndex);
+            std::lock_guard<std::mutex> lock(g_vidQMutex);
+            if (g_vidQ.size() > 300) {
+                g_vidQ.pop(); // Drop oldest frame to avoid blocking or OOM
+            }
+            g_vidQ.push({std::vector<uint8_t>(data, data + size), isIdr, frameIndex});
         }
+        g_vidQCv.notify_one();
     });
 
     pTab->OnAudioPacket = (f_OnAudioPacket)([](const uint8_t* data, int size, int64_t pts)
     {
-        if (g_HostObject.IsObject())
         {
-            X::Value binValue((char*)data, size);
-            g_HostObject["OnAudioPacket"](binValue, (long long)pts);
+            std::lock_guard<std::mutex> lock(g_audQMutex);
+            if (g_audQ.size() > 100) {
+                g_audQ.pop(); // Drop oldest audio packet to avoid blocking or OOM
+            }
+            g_audQ.push({std::vector<uint8_t>(data, data + size), pts});
         }
+        g_audQCv.notify_one();
     });
 
     g_api.SetHostApis(pTab);
