@@ -1,0 +1,6 @@
+MSBuild version 17.14.23+b0019275e for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule C:/Galaxy3DVision/Projects/Sunbridge/CMakeLists.txt
+  Main.cpp
+C:\Galaxy3DVision\Projects\Sunbridge\src\Main.cpp(1,10): error C1083: Cannot open include file: 'xhost.h': No such file or directory [C:\Galaxy3DVision\Projects\Sunbridge\build\x64-Release\sunshine_bridge.vcxproj]

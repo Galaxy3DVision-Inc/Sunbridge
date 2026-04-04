@@ -3,10 +3,10 @@ project("sunshine_bridge")
 
 # The XLang repo resides as a sibling directory:
 # C:\Galaxy3DVision\Projects\xlang
-include_directories("../xlang/Api")
+include_directories("D:/CantorAI/xlang/Api")
 include_directories("src")
 
-FILE(GLOB Xlang_Api_SRC "../xlang/Api/*.cpp")
+FILE(GLOB Xlang_Api_SRC "D:/CantorAI/xlang/Api/*.cpp")
 FILE(GLOB Module_SRC "src/*.cpp")
 
 add_library(${PROJECT_NAME} 

@@ -1,0 +1,3 @@
+C:/Galaxy3DVision/Projects/Sunbridge/build/CMakeFiles/sunshine_bridge.dir
+C:/Galaxy3DVision/Projects/Sunbridge/build/CMakeFiles/ALL_BUILD.dir
+C:/Galaxy3DVision/Projects/Sunbridge/build/CMakeFiles/ZERO_CHECK.dir
