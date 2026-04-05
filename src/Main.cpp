@@ -165,7 +165,7 @@ public:
 
 SunshineAPI g_api;
 
-#define LRPC_PORT 31415
+
 
 static bool GetCurLibInfo(void* EntryFuncName, std::string& strFullPath,
     std::string& strFolderPath, std::string& strLibName)
@@ -200,7 +200,7 @@ static bool GetCurLibInfo(void* EntryFuncName, std::string& strFullPath,
 // Public Plugin C API Exports for Sunshine
 // ----------------------------------------------------
 
-extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char* hostPath)
+extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char* hostPath, int lrpcPort)
 {
     SunshineCallTable* pTab = (SunshineCallTable*)hostCallTable;
     
@@ -248,7 +248,7 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char* hostPat
     {
         g_xload.Run();
         X::RegisterPackage<SunshineAPI>(hostPath, "sunshine", &g_api);
-        X::g_pXHost->Lrpc_Listen(LRPC_PORT, false);
+        X::g_pXHost->Lrpc_Listen(lrpcPort, false);
     }
     return retCode;
 }
