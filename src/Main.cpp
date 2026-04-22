@@ -214,8 +214,9 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char* hostPat
     {
         {
             std::lock_guard<std::mutex> lock(g_vidQMutex);
-            if (g_vidQ.size() > 300) {
+            if (g_vidQ.size() > 100) {
                 g_vidQ.pop(); // Drop oldest frame to avoid blocking or OOM
+                std::cout << "[Sunbridge] WARNING: Frame Queue Full! Dropping oldest frame." << std::endl;
             }
             g_vidQ.push({std::vector<uint8_t>(data, data + size), isIdr, frameIndex});
         }
