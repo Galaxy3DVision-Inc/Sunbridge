@@ -112,11 +112,16 @@ public:
         }
     }
 
-    int InjectInput(std::string binaryData)
+    int InjectInput(X::Value binaryDataVal)
     {
         if (mHostApis && mHostApis->InjectInput)
         {
-            return mHostApis->InjectInput((const uint8_t*)binaryData.data(), (int)binaryData.size());
+            if (binaryDataVal.IsObject() && binaryDataVal.GetObj()->GetType() == X::ObjType::Binary) {
+                X::Bin binData(binaryDataVal);
+                return mHostApis->InjectInput((const uint8_t*)binData->Data(), (int)binData->Size());
+            } else {
+                std::cout << "[Sunbridge] InjectInput: Value is not binary! Type=" << (int)binaryDataVal.GetType() << std::endl;
+            }
         }
         return -1;
     }
