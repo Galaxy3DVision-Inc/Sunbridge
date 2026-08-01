@@ -1,13 +1,16 @@
 cmake_minimum_required(VERSION 3.8)
 project("sunshine_bridge")
 
-# The XLang repo resides as a sibling directory:
-# C:\Galaxy3DVision\Projects\xlang
-include_directories("D:/CantorAI/xlang/Api")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+find_package(XLangSource REQUIRED)
+
+include_directories("${XLANG_API_DIR}")
 include_directories("src")
 
-FILE(GLOB Xlang_Api_SRC "D:/CantorAI/xlang/Api/*.cpp")
+FILE(GLOB Xlang_Api_SRC "${XLANG_API_DIR}/*.cpp")
 FILE(GLOB Module_SRC "src/*.cpp")
+
+message(STATUS "Using XLang source: ${XLANG_ROOT}")
 
 add_library(${PROJECT_NAME} 
 	SHARED
