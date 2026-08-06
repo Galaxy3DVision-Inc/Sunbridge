@@ -138,7 +138,8 @@ public:
         lock.unlock();
 
         X::List list;
-        X::Bin binFrame((char*)frame.data.data(), frame.data.size(), true);
+        X::Bin binFrame((char*)frame.data.data(),
+            static_cast<unsigned long long>(frame.data.size()), true);
         list += binFrame;
         list += X::Value(frame.isIdr);
         list += X::Value((long long)frame.frameIndex);
@@ -159,7 +160,8 @@ public:
         lock.unlock();
 
         X::List list;
-        X::Bin binPacket((char*)pkt.data.data(), pkt.data.size(), true);
+        X::Bin binPacket((char*)pkt.data.data(),
+            static_cast<unsigned long long>(pkt.data.size()), true);
         list += binPacket;
         list += X::Value((long long)pkt.pts);
         
