@@ -7,7 +7,7 @@ extern "C" {
 #endif
 
     // ==========================================
-    // Outbound (XLang Context -> Sunshine Host)
+    // Outbound (Sunbridge IPC -> Sunshine Host)
     // ==========================================
 
     /// Tell Sunshine to start the video capture and encoding thread
@@ -29,7 +29,7 @@ extern "C" {
     typedef int (*f_InjectInput)(const uint8_t* pEventData, int cbSize);
 
     // ==========================================
-    // Inbound (Sunshine Host -> XLang Context)
+    // Inbound (Sunshine Host -> Sunbridge IPC)
     // ==========================================
 
     /// Callback whenever a new encoded Video NAL Frame is ready
@@ -37,7 +37,7 @@ extern "C" {
     
     typedef void (*f_OnAudioPacket)(const uint8_t* data, int size, int64_t pts);
     
-    /// Callback from XLang to request a new IDR/SPS slice immediately
+    /// Callback from the component host to request a new IDR/SPS slice.
     typedef void (*f_RequestIdr)();
 
 #ifdef __cplusplus
