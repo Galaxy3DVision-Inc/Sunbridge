@@ -39,7 +39,7 @@ std::deque<OutboundMessage> g_queue;
 std::thread g_sender;
 std::atomic<bool> g_loggedFirstVideo{false};
 std::atomic<bool> g_loggedFirstVideoSend{false};
-std::atomic<bool> g_waitingForIdr{false};
+std::atomic<bool> g_waitingForIdr{true};
 std::atomic<std::uint64_t> g_idrRequests{0};
 std::atomic<std::uint64_t> g_idrFrames{0};
 std::atomic<std::uint64_t> g_deltasDiscarded{0};
@@ -113,6 +113,7 @@ void QueueMessage(std::string method, std::vector<std::uint8_t> bytes, std::size
 
 void QueueVideoFrame(std::vector<std::uint8_t> bytes, bool isIdr) {
     bool requestIdr = false;
+    bool waitingForIdrRequest = false;
     {
         std::lock_guard<std::mutex> lock(g_queueMutex);
         if (isIdr) {
@@ -125,31 +126,38 @@ void QueueVideoFrame(std::vector<std::uint8_t> bytes, bool isIdr) {
             g_waitingForIdr = false;
         } else {
             if (g_waitingForIdr) {
-                ++g_deltasDiscarded;
-                return;
-            }
-            std::size_t videoCount = 0;
-            for (const auto& queued : g_queue) {
-                if (queued.method == "Rtc/VideoFrame") ++videoCount;
-            }
-            if (videoCount >= 4) {
-                // H.264 deltas form a dependency chain. Dropping one queued
-                // delta and sending later deltas corrupts the decoder. Drop
-                // the entire chain and wait for a fresh IDR instead.
-                std::erase_if(g_queue, [](const OutboundMessage& queued) {
-                    return queued.method == "Rtc/VideoFrame";
-                });
-                g_waitingForIdr = true;
-                requestIdr = true;
+                const auto discarded = ++g_deltasDiscarded;
+                // Some encoders acknowledge a keyframe request before they
+                // actually emit an IDR. Keep asking at a bounded cadence and
+                // never expose undecodable deltas to the WebRTC receiver.
+                requestIdr = discarded == 1 || discarded % 30 == 0;
+                waitingForIdrRequest = requestIdr;
             } else {
-                g_queue.push_back({"Rtc/VideoFrame", std::move(bytes)});
+                std::size_t videoCount = 0;
+                for (const auto& queued : g_queue) {
+                    if (queued.method == "Rtc/VideoFrame") ++videoCount;
+                }
+                if (videoCount >= 4) {
+                    // H.264 deltas form a dependency chain. Dropping one queued
+                    // delta and sending later deltas corrupts the decoder. Drop
+                    // the entire chain and wait for a fresh IDR instead.
+                    std::erase_if(g_queue, [](const OutboundMessage& queued) {
+                        return queued.method == "Rtc/VideoFrame";
+                    });
+                    g_waitingForIdr = true;
+                    requestIdr = true;
+                } else {
+                    g_queue.push_back({"Rtc/VideoFrame", std::move(bytes)});
+                }
             }
         }
         if (isIdr) g_queue.push_back({"Rtc/VideoFrame", std::move(bytes)});
     }
     if (requestIdr && g_host && g_host->RequestIdr) {
         const auto request = ++g_idrRequests;
-        BridgeLog("Video IPC backlog: discarded delta chain and requested IDR #" +
+        BridgeLog(std::string(waitingForIdrRequest
+            ? "Waiting for IDR: discarded deltas and requested IDR #"
+            : "Video IPC backlog: discarded delta chain and requested IDR #") +
             std::to_string(request));
         g_host->RequestIdr();
     }
@@ -233,6 +241,13 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
         }
     }
     if (method == "Stop") {
+        {
+            std::lock_guard<std::mutex> lock(g_queueMutex);
+            std::erase_if(g_queue, [](const OutboundMessage& queued) {
+                return queued.method == "Rtc/VideoFrame";
+            });
+            g_waitingForIdr = true;
+        }
         if (g_host->StopAudio) g_host->StopAudio();
         if (g_host->StopVideo) g_host->StopVideo();
         return Cas::Value("OK");
