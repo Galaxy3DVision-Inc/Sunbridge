@@ -284,11 +284,23 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
     g_frames = std::make_unique<principia::ipc::IpcManager>();
     g_frames->m_disableAsyncReads = true;
     g_commands->SetMessageCallback(HandleCommand);
+    auto connected = std::make_shared<std::atomic<bool>>(false);
+    g_commands->SetConnectionCallback([connected](bool online) {
+        if (online) *connected = true;
+        else if (connected->load()) {
+            g_running = false;
+            g_queueReady.notify_all();
+        }
+    });
+    g_running = true;
     const bool commandsStarted = g_commands->StartClient(ipcIn);
     const bool framesStarted = g_frames->StartClient(ipcOut);
     BridgeLog(std::string("IPC clients commands=") + (commandsStarted ? "started" : "failed") +
         " frames=" + (framesStarted ? "started" : "failed"));
-    if (!commandsStarted || !framesStarted) return 3;
+    if (!commandsStarted || !framesStarted) {
+        g_running = false;
+        return 3;
+    }
 
     g_host->OnVideoFrame = [](const std::uint8_t* data, int size, bool isIdr, std::int64_t frameIndex) {
         if (!data || size <= 0) return;
@@ -323,7 +335,6 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
         QueueMessage("AudioFrame", std::move(message), 64);
     };
 
-    g_running = true;
     g_sender = std::thread(SenderLoop);
     bool readySent = false;
     for (int attempt = 0; attempt < 50 && g_running; ++attempt) {

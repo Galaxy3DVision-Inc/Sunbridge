@@ -12,11 +12,12 @@ include("${PRINCIPIA_ROOT}/cmake/CasLangDependency.cmake")
 
 set(PRINCIPIA_IPC_SRC
     "${PRINCIPIA_ROOT}/common/ipc/IpcManager.cpp"
-    "${PRINCIPIA_ROOT}/common/ipc/IpcStream.cpp")
+    "${PRINCIPIA_ROOT}/common/ipc/IpcStream.cpp"
+    "${PRINCIPIA_ROOT}/common/ipc/SlotTransport.cpp")
 if(WIN32)
-    list(APPEND PRINCIPIA_IPC_SRC "${PRINCIPIA_ROOT}/common/ipc/SMSwapBuffer_Win32.cpp")
+    list(APPEND PRINCIPIA_IPC_SRC "${PRINCIPIA_ROOT}/common/ipc/SlotPlatform_Win32.cpp")
 else()
-    list(APPEND PRINCIPIA_IPC_SRC "${PRINCIPIA_ROOT}/common/ipc/SMSwapBuffer_POSIX.cpp")
+    list(APPEND PRINCIPIA_IPC_SRC "${PRINCIPIA_ROOT}/common/ipc/SlotPlatform_POSIX.cpp")
 endif()
 
 add_library(sunshine_bridge SHARED "src/Main.cpp" ${PRINCIPIA_IPC_SRC})
@@ -26,6 +27,9 @@ target_include_directories(sunshine_bridge PRIVATE
     "${PRINCIPIA_ROOT}/common/inc"
     "${PRINCIPIA_ROOT}/thirdparty")
 target_link_libraries(sunshine_bridge PRIVATE CasLang::compat)
+if(WIN32)
+    target_link_libraries(sunshine_bridge PRIVATE advapi32)
+endif()
 if(MSVC)
     set_property(TARGET sunshine_bridge PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
