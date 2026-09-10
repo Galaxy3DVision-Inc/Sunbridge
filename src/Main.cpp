@@ -180,22 +180,41 @@ void SenderLoop() {
             g_queue.pop_front();
         }
         if (g_frames) {
-            const bool sent = g_frames->PushMessage(message.method,
-                Cas::Value(message.bytes.empty() ? nullptr : message.bytes.data(),
-                           message.bytes.size()));
+            const bool video = message.method == "Rtc/VideoFrame";
+            const bool keyFrame = video && !message.bytes.empty() && message.bytes[0] != 0;
+            bool sent = false;
+            int retries = 0;
+            do {
+                sent = g_frames->PushMessage(message.method,
+                    Cas::Value(message.bytes.empty() ? nullptr : message.bytes.data(),
+                               message.bytes.size()),
+                    video ? 50 : 100);
+                if (sent || !video || !g_running) break;
+                // Preserve the encoded frame while CantorFiber drains a short
+                // IPC burst. If the producer has already abandoned this delta
+                // chain, do not reintroduce an obsolete delta before its IDR.
+                if (!keyFrame && g_waitingForIdr) break;
+                if (++retries >= 40) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            } while (true);
+            if (video && sent && retries > 0) {
+                BridgeLog("Video IPC backpressure recovered after " +
+                    std::to_string(retries) + " retries");
+            }
             if (message.method == "Rtc/VideoFrame" && !g_loggedFirstVideoSend.exchange(true)) {
                 BridgeLog(std::string("First video IPC send ") + (sent ? "succeeded" : "failed") +
                     " bytes=" + std::to_string(message.bytes.size()));
             }
-            if (message.method == "Rtc/VideoFrame" && !sent) {
+            if (video && !sent) {
+                bool requestIdr = false;
                 {
                     std::lock_guard<std::mutex> lock(g_queueMutex);
                     std::erase_if(g_queue, [](const OutboundMessage& queued) {
                         return queued.method == "Rtc/VideoFrame";
                     });
-                    g_waitingForIdr = true;
+                    requestIdr = !g_waitingForIdr.exchange(true);
                 }
-                if (g_host && g_host->RequestIdr) {
+                if (requestIdr && g_host && g_host->RequestIdr) {
                     const auto request = ++g_idrRequests;
                     BridgeLog("Video IPC send failed; requested recovery IDR #" +
                         std::to_string(request));
