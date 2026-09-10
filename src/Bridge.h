@@ -33,7 +33,8 @@ extern "C" {
     // ==========================================
 
     /// Callback whenever a new encoded Video NAL Frame is ready
-    typedef void (*f_OnVideoFrame)(const uint8_t* data, int size, bool isIdr, int64_t frameIndex);
+    typedef void (*f_OnVideoFrame)(const uint8_t* data, int size, bool isIdr,
+                                   int64_t frameIndex, int64_t captureTimestampUs);
     
     typedef void (*f_OnAudioPacket)(const uint8_t* data, int size, int64_t pts);
     

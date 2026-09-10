@@ -30,8 +30,7 @@ struct OutboundMessage {
 };
 
 SunshineCallTable* g_host = nullptr;
-std::unique_ptr<principia::ipc::IpcManager> g_commands;
-std::unique_ptr<principia::ipc::IpcManager> g_frames;
+std::unique_ptr<principia::ipc::IpcManager> g_ipc;
 std::atomic<bool> g_running{false};
 std::mutex g_queueMutex;
 std::condition_variable g_queueReady;
@@ -179,13 +178,13 @@ void SenderLoop() {
             message = std::move(g_queue.front());
             g_queue.pop_front();
         }
-        if (g_frames) {
+        if (g_ipc) {
             const bool video = message.method == "Rtc/VideoFrame";
             const bool keyFrame = video && !message.bytes.empty() && message.bytes[0] != 0;
             bool sent = false;
             int retries = 0;
             do {
-                sent = g_frames->PushMessage(message.method,
+                sent = g_ipc->PushMessage(message.method,
                     Cas::Value(message.bytes.empty() ? nullptr : message.bytes.data(),
                                message.bytes.size()),
                     video ? 50 : 100);
@@ -318,37 +317,29 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
     BridgeLog(std::string("LoadBridge host=") + (hostCallTable ? "yes" : "no") +
         " ipcIn=" + (ipcIn && *ipcIn ? ipcIn : "<missing>") +
         " ipcOut=" + (ipcOut && *ipcOut ? ipcOut : "<missing>"));
-    if (!hostCallTable || !ipcIn || !*ipcIn || !ipcOut || !*ipcOut) return 2;
+    if (!hostCallTable || !ipcIn || !*ipcIn) return 2;
 
     g_host = static_cast<SunshineCallTable*>(hostCallTable);
     g_bridgeLoadedAt = std::chrono::steady_clock::now();
-    g_commands = std::make_unique<principia::ipc::IpcManager>();
-    g_frames = std::make_unique<principia::ipc::IpcManager>();
-    g_frames->m_disableAsyncReads = true;
-    g_commands->SetMessageCallback(HandleCommand);
-    g_commands->SetConnectionCallback([](bool online) {
+    g_ipc = std::make_unique<principia::ipc::IpcManager>();
+    g_ipc->SetMessageCallback(HandleCommand);
+    g_ipc->SetConnectionCallback([](bool online) {
         if (!online) {
             g_readySent = false;
-            BridgeLog("Command IPC disconnected; waiting for CantorFiber reconnect");
-        }
-    });
-    g_frames->SetConnectionCallback([](bool online) {
-        if (!online) {
-            g_readySent = false;
-            BridgeLog("Frame IPC disconnected; waiting for CantorFiber reconnect");
+            BridgeLog("Duplex IPC disconnected; waiting for CantorFiber reconnect");
         }
     });
     g_running = true;
-    const bool commandsStarted = g_commands->StartClient(ipcIn);
-    const bool framesStarted = g_frames->StartClient(ipcOut);
-    BridgeLog(std::string("IPC clients commands=") + (commandsStarted ? "started" : "failed") +
-        " frames=" + (framesStarted ? "started" : "failed"));
-    if (!commandsStarted || !framesStarted) {
+    const bool ipcStarted = g_ipc->StartClient(ipcIn);
+    BridgeLog(std::string("Duplex IPC client=") + (ipcStarted ? "started" : "failed"));
+    if (!ipcStarted) {
         g_running = false;
         return 3;
     }
 
-    g_host->OnVideoFrame = [](const std::uint8_t* data, int size, bool isIdr, std::int64_t frameIndex) {
+    g_host->OnVideoFrame = [](const std::uint8_t* data, int size, bool isIdr,
+                              std::int64_t frameIndex,
+                              std::int64_t captureTimestampUs) {
         if (!data || size <= 0) return;
         const auto nal = InspectH264AccessUnit(data, static_cast<std::size_t>(size));
         const bool actualIdr = nal.hasAnnexBStartCode ? nal.hasIdr : isIdr;
@@ -368,9 +359,23 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
                 " profile_level_id=" + (nal.profileLevelId.empty() ? std::string("unknown") : nal.profileLevelId) +
                 " discarded_deltas=" + std::to_string(g_deltasDiscarded.load()));
         }
-        std::vector<std::uint8_t> message(static_cast<std::size_t>(size) + 1);
-        message[0] = actualIdr ? 1 : 0;
-        std::memcpy(message.data() + 1, data, static_cast<std::size_t>(size));
+        // Versioned, fixed-width metadata keeps Sunshine's capture timeline
+        // intact across the component IPC boundary. CantorFiber maps this
+        // monotonic timestamp into WebRTC's clock instead of rebuilding frame
+        // timing from bursty IPC arrival times.
+        constexpr std::size_t kHeaderSize = 24;
+        std::vector<std::uint8_t> message(static_cast<std::size_t>(size) + kHeaderSize, 0);
+        message[0] = 'C'; message[1] = 'F'; message[2] = 'V'; message[3] = '1';
+        message[4] = actualIdr ? 1 : 0;
+        const auto writeI64 = [&message](std::size_t offset, std::int64_t value) {
+            const auto bits = static_cast<std::uint64_t>(value);
+            for (std::size_t byte = 0; byte < 8; ++byte) {
+                message[offset + byte] = static_cast<std::uint8_t>(bits >> (byte * 8));
+            }
+        };
+        writeI64(8, frameIndex);
+        writeI64(16, captureTimestampUs);
+        std::memcpy(message.data() + kHeaderSize, data, static_cast<std::size_t>(size));
         QueueVideoFrame(std::move(message), actualIdr);
     };
     g_host->OnAudioPacket = [](const std::uint8_t* data, int size, std::int64_t pts) {
@@ -386,8 +391,8 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
     const auto initialReadyDeadline = std::chrono::steady_clock::now() +
         std::chrono::seconds(5);
     while (g_running) {
-        if (!g_readySent && g_commands->IsConnected() && g_frames->IsConnected() &&
-            g_frames->PushMessage("Ready", Cas::Value(""))) {
+        if (!g_readySent && g_ipc->IsConnected() &&
+            g_ipc->PushMessage("Ready", Cas::Value(""))) {
             g_readySent = true;
             BridgeLog("Ready handshake sent");
         }
@@ -405,9 +410,7 @@ extern "C" BRIDGE_EXPORT void UnloadBridge() {
     g_running = false;
     g_queueReady.notify_all();
     if (g_sender.joinable()) g_sender.join();
-    if (g_commands) g_commands->Stop();
-    if (g_frames) g_frames->Stop();
-    g_commands.reset();
-    g_frames.reset();
+    if (g_ipc) g_ipc->Stop();
+    g_ipc.reset();
     g_host = nullptr;
 }
