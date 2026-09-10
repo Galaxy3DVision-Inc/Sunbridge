@@ -120,12 +120,14 @@ void QueueVideoFrame(std::vector<std::uint8_t> bytes, bool isIdr) {
     {
         std::lock_guard<std::mutex> lock(g_queueMutex);
         if (isIdr) {
-            // Never leave a recovery keyframe behind older delta frames. A PLI
-            // or periodic IDR must become the next video message delivered to
-            // CantorFiber so Chromium can immediately rebuild its decoder.
-            std::erase_if(g_queue, [](const OutboundMessage& queued) {
-                return queued.method == "Rtc/VideoFrame";
-            });
+            // Only a recovery IDR supersedes the damaged delta chain. Normal
+            // periodic IDRs remain in capture order; removing valid deltas in
+            // front of them creates an unreported visual jump at every GOP.
+            if (g_waitingForIdr) {
+                std::erase_if(g_queue, [](const OutboundMessage& queued) {
+                    return queued.method == "Rtc/VideoFrame";
+                });
+            }
             g_waitingForIdr = false;
         } else {
             if (g_waitingForIdr) {
@@ -140,7 +142,7 @@ void QueueVideoFrame(std::vector<std::uint8_t> bytes, bool isIdr) {
                 for (const auto& queued : g_queue) {
                     if (queued.method == "Rtc/VideoFrame") ++videoCount;
                 }
-                if (videoCount >= 4) {
+                if (videoCount >= 16) {
                     // H.264 deltas form a dependency chain. Dropping one queued
                     // delta and sending later deltas corrupts the decoder. Drop
                     // the entire chain and wait for a fresh IDR instead.
@@ -235,9 +237,11 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
             const int fps = config.value("fps", 60);
             const int bitrateKbps = config.value("bitrate_kbps", 10000);
             const auto rtcConfig = nlohmann::json{
-                // Leave pacing room for RTP headers and short IDR bursts. The
-                // Sunshine encoder still owns the requested media bitrate.
-                {"max_bitrate_bps", bitrateKbps * 4000},
+                // Leave measured room for RTP overhead while keeping large
+                // IDRs inside the WebRTC pacer. A 4x budget let each keyframe
+                // burst at roughly 40 Mbps on a 10 Mbps stream, which caused
+                // Wi-Fi packet loss and a lasting congestion-control collapse.
+                {"max_bitrate_bps", bitrateKbps * 1250},
                 {"max_framerate", fps}
             }.dump();
             QueueMessage("Rtc/VideoConfig",
