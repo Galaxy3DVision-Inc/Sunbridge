@@ -39,10 +39,13 @@ std::deque<OutboundMessage> g_queue;
 std::thread g_sender;
 std::atomic<bool> g_loggedFirstVideo{false};
 std::atomic<bool> g_loggedFirstVideoSend{false};
+std::atomic<bool> g_readySent{false};
 std::atomic<bool> g_waitingForIdr{true};
 std::atomic<std::uint64_t> g_idrRequests{0};
 std::atomic<std::uint64_t> g_idrFrames{0};
 std::atomic<std::uint64_t> g_deltasDiscarded{0};
+std::chrono::steady_clock::time_point g_lastVideoStop{};
+std::chrono::steady_clock::time_point g_bridgeLoadedAt{};
 
 struct H264AccessUnitInfo {
     bool hasAnnexBStartCode = false;
@@ -205,6 +208,18 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
     if (!g_host) return Cas::Value("HOST_UNAVAILABLE");
     if (method == "Start") {
         try {
+            // Sunshine's macOS capture teardown completes just after
+            // StopVideo returns. Starting a replacement encoder immediately
+            // can inherit the retiring display resources and produce no
+            // frames. Bound that handoff before reusing the warm process.
+            constexpr auto kCaptureRestartDelay = std::chrono::milliseconds(500);
+            constexpr auto kInitialCaptureDelay = std::chrono::seconds(1);
+            const auto now = std::chrono::steady_clock::now();
+            auto readyAt = g_bridgeLoadedAt + kInitialCaptureDelay;
+            if (g_lastVideoStop.time_since_epoch().count() != 0) {
+                readyAt = (std::max)(readyAt, g_lastVideoStop + kCaptureRestartDelay);
+            }
+            if (now < readyAt) std::this_thread::sleep_for(readyAt - now);
             const auto config = nlohmann::json::parse(payload.GetString());
             const auto display = config.value("display", "");
             {
@@ -220,7 +235,9 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
             const int fps = config.value("fps", 60);
             const int bitrateKbps = config.value("bitrate_kbps", 10000);
             const auto rtcConfig = nlohmann::json{
-                {"max_bitrate_bps", bitrateKbps * 1000},
+                // Leave pacing room for RTP headers and short IDR bursts. The
+                // Sunshine encoder still owns the requested media bitrate.
+                {"max_bitrate_bps", bitrateKbps * 4000},
                 {"max_framerate", fps}
             }.dump();
             QueueMessage("Rtc/VideoConfig",
@@ -250,6 +267,7 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
         }
         if (g_host->StopAudio) g_host->StopAudio();
         if (g_host->StopVideo) g_host->StopVideo();
+        g_lastVideoStop = std::chrono::steady_clock::now();
         return Cas::Value("OK");
     }
     if (method == "RequestIdr") {
@@ -280,16 +298,21 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
     if (!hostCallTable || !ipcIn || !*ipcIn || !ipcOut || !*ipcOut) return 2;
 
     g_host = static_cast<SunshineCallTable*>(hostCallTable);
+    g_bridgeLoadedAt = std::chrono::steady_clock::now();
     g_commands = std::make_unique<principia::ipc::IpcManager>();
     g_frames = std::make_unique<principia::ipc::IpcManager>();
     g_frames->m_disableAsyncReads = true;
     g_commands->SetMessageCallback(HandleCommand);
-    auto connected = std::make_shared<std::atomic<bool>>(false);
-    g_commands->SetConnectionCallback([connected](bool online) {
-        if (online) *connected = true;
-        else if (connected->load()) {
-            g_running = false;
-            g_queueReady.notify_all();
+    g_commands->SetConnectionCallback([](bool online) {
+        if (!online) {
+            g_readySent = false;
+            BridgeLog("Command IPC disconnected; waiting for CantorFiber reconnect");
+        }
+    });
+    g_frames->SetConnectionCallback([](bool online) {
+        if (!online) {
+            g_readySent = false;
+            BridgeLog("Frame IPC disconnected; waiting for CantorFiber reconnect");
         }
     });
     g_running = true;
@@ -336,17 +359,22 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
     };
 
     g_sender = std::thread(SenderLoop);
-    bool readySent = false;
-    for (int attempt = 0; attempt < 50 && g_running; ++attempt) {
-        if (g_commands->IsConnected() && g_frames->IsConnected() &&
+    bool loggedInitialWait = false;
+    const auto initialReadyDeadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(5);
+    while (g_running) {
+        if (!g_readySent && g_commands->IsConnected() && g_frames->IsConnected() &&
             g_frames->PushMessage("Ready", Cas::Value(""))) {
-            readySent = true;
-            break;
+            g_readySent = true;
+            BridgeLog("Ready handshake sent");
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!g_readySent && !loggedInitialWait &&
+            std::chrono::steady_clock::now() >= initialReadyDeadline) {
+            loggedInitialWait = true;
+            BridgeLog("Ready handshake still waiting for CantorFiber");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
-    BridgeLog(std::string("Ready handshake ") + (readySent ? "sent" : "timed out"));
-    while (g_running) std::this_thread::sleep_for(std::chrono::milliseconds(200));
     return 0;
 }
 
