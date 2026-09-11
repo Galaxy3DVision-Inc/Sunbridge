@@ -38,6 +38,8 @@ std::deque<OutboundMessage> g_queue;
 std::thread g_sender;
 std::atomic<bool> g_loggedFirstVideo{false};
 std::atomic<bool> g_loggedFirstVideoSend{false};
+std::atomic<bool> g_loggedFirstAudio{false};
+std::atomic<bool> g_loggedFirstAudioSend{false};
 std::atomic<bool> g_readySent{false};
 std::atomic<bool> g_waitingForIdr{true};
 std::atomic<std::uint64_t> g_idrRequests{0};
@@ -204,6 +206,10 @@ void SenderLoop() {
                 BridgeLog(std::string("First video IPC send ") + (sent ? "succeeded" : "failed") +
                     " bytes=" + std::to_string(message.bytes.size()));
             }
+            if (message.method == "Rtc/AudioFrame" && !g_loggedFirstAudioSend.exchange(true)) {
+                BridgeLog(std::string("First audio IPC send ") + (sent ? "succeeded" : "failed") +
+                    " bytes=" + std::to_string(message.bytes.size()));
+            }
             if (video && !sent) {
                 bool requestIdr = false;
                 {
@@ -264,6 +270,13 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
             }.dump();
             QueueMessage("Rtc/VideoConfig",
                 std::vector<std::uint8_t>(rtcConfig.begin(), rtcConfig.end()), 16);
+            const bool audioRequested = config.value("audio", true);
+            const bool audioStarted = !audioRequested ||
+                (g_host->StartAudio && g_host->StartAudio(""));
+            if (audioRequested) {
+                BridgeLog(std::string("Start audio ") +
+                    (audioStarted ? "succeeded" : "failed"));
+            }
             const bool videoStarted = g_host->StartVideo && g_host->StartVideo(
                 display.c_str(), config.value("width", 1920), config.value("height", 1080),
                 fps, bitrateKbps);
@@ -273,7 +286,6 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
             }
             BridgeLog(std::string("Start video display=") + display +
                 (videoStarted ? " succeeded" : " failed"));
-            if (config.value("audio", true) && g_host->StartAudio) g_host->StartAudio("");
             return Cas::Value(videoStarted ? "OK" : "VIDEO_START_FAILED");
         } catch (...) {
             return Cas::Value("INVALID_START_CONFIG");
@@ -380,10 +392,14 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
     };
     g_host->OnAudioPacket = [](const std::uint8_t* data, int size, std::int64_t pts) {
         if (!data || size <= 0) return;
+        if (!g_loggedFirstAudio.exchange(true)) {
+            BridgeLog("First encoded Opus callback bytes=" + std::to_string(size) +
+                " pts=" + std::to_string(pts));
+        }
         std::vector<std::uint8_t> message(sizeof(pts) + static_cast<std::size_t>(size));
         std::memcpy(message.data(), &pts, sizeof(pts));
         std::memcpy(message.data() + sizeof(pts), data, static_cast<std::size_t>(size));
-        QueueMessage("AudioFrame", std::move(message), 64);
+        QueueMessage("Rtc/AudioFrame", std::move(message), 64);
     };
 
     g_sender = std::thread(SenderLoop);
