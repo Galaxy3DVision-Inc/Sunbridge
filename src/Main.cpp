@@ -30,6 +30,17 @@ struct OutboundMessage {
 };
 
 SunshineCallTable* g_host = nullptr;
+
+// A host can cap capture for a slower link without changing the browser's
+// requested quality or the defaults used by other installations.
+int CaptureLimit(const char* name, int requested) {
+    const char* value = std::getenv(name);
+    if (!value || !*value) return requested;
+    char* end = nullptr;
+    const long limit = std::strtol(value, &end, 10);
+    if (*end || limit <= 0 || limit > requested) return requested;
+    return static_cast<int>(limit);
+}
 std::unique_ptr<principia::ipc::IpcManager> g_ipc;
 std::atomic<bool> g_running{false};
 std::mutex g_queueMutex;
@@ -258,8 +269,16 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
             g_idrRequests = 0;
             g_idrFrames = 0;
             g_deltasDiscarded = 0;
-            const int fps = config.value("fps", 60);
-            const int bitrateKbps = config.value("bitrate_kbps", 10000);
+            const int fps = CaptureLimit("CANTOR_DESKTOP_MAX_FPS", config.value("fps", 60));
+            const int bitrateKbps = CaptureLimit("CANTOR_DESKTOP_MAX_BITRATE_KBPS",
+                                                config.value("bitrate_kbps", 10000));
+            const int requestedWidth = (std::max)(2, config.value("width", 1920));
+            const int requestedHeight = (std::max)(2, config.value("height", 1080));
+            const double scale = (std::min)(
+                CaptureLimit("CANTOR_DESKTOP_MAX_WIDTH", requestedWidth) / static_cast<double>(requestedWidth),
+                CaptureLimit("CANTOR_DESKTOP_MAX_HEIGHT", requestedHeight) / static_cast<double>(requestedHeight));
+            const int width = (std::max)(2, static_cast<int>(requestedWidth * scale) / 2 * 2);
+            const int height = (std::max)(2, static_cast<int>(requestedHeight * scale) / 2 * 2);
             const auto rtcConfig = nlohmann::json{
                 // Leave measured room for RTP overhead while keeping large
                 // IDRs inside the WebRTC pacer. A 4x budget let each keyframe
@@ -278,7 +297,7 @@ Cas::Value HandleCommand(const std::string& method, const Cas::Value& payload) {
                     (audioStarted ? "succeeded" : "failed"));
             }
             const bool videoStarted = g_host->StartVideo && g_host->StartVideo(
-                display.c_str(), config.value("width", 1920), config.value("height", 1080),
+                display.c_str(), width, height,
                 fps, bitrateKbps);
             if (videoStarted && g_host->RequestIdr) {
                 ++g_idrRequests;
