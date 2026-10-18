@@ -1,4 +1,5 @@
 #include "Bridge.h"
+#include "EncodedVideoFrame.h"
 #include "IpcManager.h"
 
 #include <algorithm>
@@ -193,7 +194,7 @@ void SenderLoop() {
         }
         if (g_ipc) {
             const bool video = message.method == "Rtc/VideoFrame";
-            const bool keyFrame = video && !message.bytes.empty() && message.bytes[0] != 0;
+            const bool keyFrame = video && sunbridge::IsEncodedVideoKeyFrame(message.bytes);
             bool sent = false;
             int retries = 0;
             do {
@@ -394,7 +395,7 @@ extern "C" BRIDGE_EXPORT int LoadBridge(void* hostCallTable, const char*, int) {
         // intact across the component IPC boundary. CantorFiber maps this
         // monotonic timestamp into WebRTC's clock instead of rebuilding frame
         // timing from bursty IPC arrival times.
-        constexpr std::size_t kHeaderSize = 24;
+        constexpr std::size_t kHeaderSize = sunbridge::kEncodedVideoHeaderSize;
         std::vector<std::uint8_t> message(static_cast<std::size_t>(size) + kHeaderSize, 0);
         message[0] = 'C'; message[1] = 'F'; message[2] = 'V'; message[3] = '1';
         message[4] = actualIdr ? 1 : 0;
