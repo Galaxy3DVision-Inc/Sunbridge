@@ -48,6 +48,16 @@ Sunbridge sits between Sunshine and an external streaming system.
 - External side: command sender and encoded-frame consumer
 - Bridge boundary: simple commands and encoded media packets
 
+## Capture limits for slower links
+
+The host may set `CANTOR_DESKTOP_MAX_WIDTH`, `CANTOR_DESKTOP_MAX_HEIGHT`,
+`CANTOR_DESKTOP_MAX_FPS`, and `CANTOR_DESKTOP_MAX_BITRATE_KBPS` in the streaming
+process environment. These optional positive integer limits cap the requested
+capture settings; unset or invalid values keep the requested settings.
+Resolution is scaled proportionally to even dimensions. For example, 1280,
+720, 30, and 3000 select at most 720p30 at 3 Mbps. On macOS, set these values in
+the CantorFiber LaunchAgent's `EnvironmentVariables` and reload the agent.
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0.

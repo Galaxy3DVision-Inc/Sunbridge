@@ -1,30 +1,36 @@
-cmake_minimum_required(VERSION 3.8)
-project("sunshine_bridge")
+cmake_minimum_required(VERSION 3.20)
+cmake_policy(SET CMP0091 NEW)
+project(sunshine_bridge LANGUAGES CXX)
 
-# The XLang repo resides as a sibling directory:
-# C:\Galaxy3DVision\Projects\xlang
-include_directories("../xlang/Api")
-include_directories("src")
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(PRINCIPIA_ROOT "" CACHE PATH "Path to the Principia source repository")
+if(NOT PRINCIPIA_ROOT)
+    get_filename_component(PRINCIPIA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+endif()
+include("${PRINCIPIA_ROOT}/cmake/CasLangDependency.cmake")
 
-FILE(GLOB Xlang_Api_SRC "../xlang/Api/*.cpp")
-FILE(GLOB Module_SRC "src/*.cpp")
+set(PRINCIPIA_IPC_SRC
+    "${PRINCIPIA_ROOT}/common/ipc/IpcManager.cpp"
+    "${PRINCIPIA_ROOT}/common/ipc/IpcStream.cpp"
+    "${PRINCIPIA_ROOT}/common/ipc/SlotTransport.cpp")
+if(WIN32)
+    list(APPEND PRINCIPIA_IPC_SRC "${PRINCIPIA_ROOT}/common/ipc/SlotPlatform_Win32.cpp")
+else()
+    list(APPEND PRINCIPIA_IPC_SRC "${PRINCIPIA_ROOT}/common/ipc/SlotPlatform_POSIX.cpp")
+endif()
 
-add_library(${PROJECT_NAME} 
-	SHARED
-	${Xlang_Api_SRC}
-	${Module_SRC}
-)
-
+add_library(sunshine_bridge SHARED "src/Main.cpp" ${PRINCIPIA_IPC_SRC})
+target_include_directories(sunshine_bridge PRIVATE
+    "src"
+    "${PRINCIPIA_ROOT}/common/ipc"
+    "${PRINCIPIA_ROOT}/common/inc"
+    "${PRINCIPIA_ROOT}/thirdparty")
+target_link_libraries(sunshine_bridge PRIVATE CasLang::compat)
+if(WIN32)
+    target_link_libraries(sunshine_bridge PRIVATE advapi32)
+endif()
 if(MSVC)
-    # Use the static C library for all build types to avoid MSVCRT.dll runtime conflicts
-    foreach(var
-        CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE
-        CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELWITHDEBINFO
-        CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE
-        CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO
-      )
-      if(${var} MATCHES "/MD")
-        string(REGEX REPLACE "/MD" "/MT" ${var} "${${var}}")
-      endif()
-    endforeach()
-endif(MSVC)
+    set_property(TARGET sunshine_bridge PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
